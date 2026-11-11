@@ -1,0 +1,11 @@
+# built programs and build leftovers
+*.exe
+*.exe.sha256
+*.new
+*.old
+/secquence
+build/node_modules/
+# local data that must never be published
+settings.json
+*.secq
+app.log

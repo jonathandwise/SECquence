@@ -1,0 +1,37 @@
+# Builds SECquence.exe and publishes it as a GitHub release whenever a version tag
+# (for example v2.5.0) is pushed. Running copies of SECquence look at the latest
+# release to decide whether to offer an update.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          GOOS=windows GOARCH=amd64 go build -trimpath \
+            -ldflags "-H windowsgui -s -w -X main.AppVersion=$VERSION -X main.UpdateRepo=$GITHUB_REPOSITORY" \
+            -o build/raw.exe .
+          (cd build && npm ci && node brand.mjs raw.exe ../SECquence.exe "$VERSION")
+          sha256sum SECquence.exe | cut -d' ' -f1 > SECquence.exe.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" SECquence.exe SECquence.exe.sha256 --title "SECquence ${GITHUB_REF_NAME#v}" --generate-notes

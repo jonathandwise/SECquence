@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>SECquence</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317212b'/%3E%3Crect x='7' y='7' width='4' height='18' rx='1' fill='%235b3fa8'/%3E%3Crect x='14' y='11' width='4' height='14' rx='1' fill='%231c7ea6'/%3E%3Crect x='21' y='15' width='4' height='10' rx='1' fill='%23c17f0a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><i style="background:var(--annual)"></i><i style="background:var(--quarterly)"></i><i style="background:var(--current);margin-right:7px"></i><b>SEC</b><span>quence</span></div>
+    <div class="search">
+      <input id="q" type="text" placeholder="Ticker or company" autocomplete="off" spellcheck="false" aria-label="Search for a company">
+      <kbd>Ctrl K</kbd>
+      <ul id="suggest" class="suggest" hidden></ul>
+    </div>
+    <button class="session-chip" id="nav-session" title="Open, save or switch sessions">
+      <svg viewBox="0 0 24 24" width="15" height="15"><path d="M5 3h10l4 4v14H5z M15 3v4h4 M8 13h8 M8 17h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <span><small>Session</small><b id="session-name">This computer</b></span>
+    </button>
+    <div class="rail-h"><span>Watchlist</span>
+      <button id="wl-refresh" class="icon-btn" title="Check for new filings"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <ul id="watch" class="watch"></ul>
+    <button class="update-chip" id="nav-update" hidden></button>
+    <div class="rail-foot">
+      <button class="rail-btn" id="nav-compare"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 6h16M4 12h16M4 18h16M9 3v18" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>Compare watchlist</button>
+      <button class="rail-btn" id="nav-folder"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>Open download folder</button>
+      <div class="rail-path" id="rail-path"></div>
+      <button class="rail-btn" id="nav-theme"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.7"/></svg><span id="theme-label">Dark mode</span></button>
+      <button class="rail-btn" id="nav-settings"><svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>Settings</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section id="welcome" class="page welcome">
+      <div class="gel" id="gel" aria-hidden="true"></div>
+      <h1>Read a company the way you would read a sequence</h1>
+      <p>Search a ticker to line up everything it has filed with the SEC, then work from the source: key financials you can trace to the exact line of a filing, prices, news, upcoming catalysts, insider trades and a risk-adjusted NPV model.</p>
+      <div class="try"><span>Start with</span>
+        <button class="chip" data-try="STOK">STOK</button><button class="chip" data-try="SRPT">SRPT</button><button class="chip" data-try="IONS">IONS</button><button class="chip" data-try="VRTX">VRTX</button>
+      </div>
+    </section>
+
+    <section id="company" class="page" hidden>
+      <div class="co-head">
+        <div class="co-top">
+          <h2 id="co-name"></h2>
+          <span id="co-tick" class="tick"></span>
+          <button id="co-quote" class="quote-chip" hidden title="Open the Stock tab"></button>
+          <div class="co-actions">
+            <button id="co-watch" class="btn"><span id="co-star">☆</span><span id="co-watch-label">Watch</span></button>
+            <button id="co-edgar" class="btn">EDGAR page</button>
+          </div>
+        </div>
+        <div id="co-meta" class="co-meta"></div>
+        <div class="strip" id="strip"></div>
+        <nav class="tabs" id="tabs"></nav>
+      </div>
+      <div id="views" class="page"></div>
+    </section>
+
+    <section id="compare" class="page" hidden></section>
+  </main>
+</div>
+
+<div id="job" class="job" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<dialog id="unsaved">
+  <form method="dialog">
+    <h3>Save your valuation model?</h3>
+    <p id="unsaved-q">You have unsaved changes in this model. Would you like to save before exiting?</p>
+    <div class="acts">
+      <button type="button" class="btn" data-act="stay">Keep working</button>
+      <button type="button" class="btn" data-act="discard">Exit without saving</button>
+      <button type="button" class="btn primary" data-act="save">Save and exit</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="update">
+  <form method="dialog">
+    <h3 id="update-title">A new version is available</h3>
+    <p id="update-q"></p>
+    <pre id="update-notes" class="update-notes" hidden></pre>
+    <div class="acts">
+      <button class="btn">Later</button>
+      <button type="button" class="btn primary" id="update-go">Update and restart</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="session">
+  <form method="dialog">
+    <h3>Session</h3>
+    <p class="muted" style="margin-top:0">A session is your watchlist and your saved valuation models. Keep it in a file to carry your work to another computer, or so each person using this computer has their own.</p>
+    <div class="session-now"><small>In use now</small><b id="session-cur"></b><div id="session-path" class="muted"></div></div>
+    <div class="session-acts">
+      <button type="button" class="btn" data-session="open">Open a session file…</button>
+      <button type="button" class="btn" data-session="saveas">Save this session as…</button>
+      <button type="button" class="btn" data-session="new">New empty session…</button>
+      <button type="button" class="btn" data-session="local" id="session-local">Switch to this computer's session</button>
+    </div>
+    <div id="session-recent"></div>
+    <p class="muted" id="session-note" style="font-size:12px"></p>
+    <div class="acts"><button class="btn">Close</button></div>
+  </form>
+</dialog>
+<dialog id="settings">
+  <form method="dialog" id="settings-form">
+    <h3>Settings</h3>
+    <p id="s-first" class="first" hidden>The SEC asks every app that downloads from EDGAR to include a contact email with its requests. Add yours once to get started. It is sent only to sec.gov.</p>
+    <label>Contact email <small>Required by the SEC</small>
+      <input id="s-email" class="input" type="email" placeholder="you@example.com" required>
+    </label>
+    <label>Download folder
+      <span class="row"><input id="s-dir" class="input" type="text" spellcheck="false"><button type="button" id="s-browse" class="btn">Browse</button></span>
+      <small>PDFs and Excel exports are saved here, in a folder per ticker.</small>
+    </label>
+    <label>Exhibits to include in bulk downloads
+      <select id="s-ex" class="select">
+        <option value="none">Main document only</option>
+        <option value="ex99">Add EX-99 (press releases, investor decks)</option>
+        <option value="all">Add all exhibits</option>
+      </select>
+    </label>
+    <small id="s-browser" class="muted"></small>
+    <small class="muted"><span id="s-version"></span> · <button type="button" class="link" id="s-update">Check for updates</button> <span id="s-update-msg"></span></small>
+    <div id="s-error" class="warn" hidden></div>
+    <div class="acts">
+      <button type="button" id="s-cancel" class="btn">Cancel</button>
+      <button type="submit" class="btn primary">Save settings</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

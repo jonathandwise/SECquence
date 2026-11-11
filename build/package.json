@@ -1,0 +1,10 @@
+{
+  "name": "secquence-build",
+  "private": true,
+  "description": "Adds the icon and version details to SECquence.exe",
+  "type": "module",
+  "dependencies": {
+    "pe-library": "^2.0.1",
+    "resedit": "^3.1.0"
+  }
+}
