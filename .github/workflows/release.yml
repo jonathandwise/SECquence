@@ -1,11 +1,12 @@
-# Builds SECquence.exe and publishes it as a GitHub release whenever a version tag
-# (for example v2.5.0) is pushed. Running copies of SECquence look at the latest
-# release to decide whether to offer an update.
+# Builds SECquence.exe and publishes it as a GitHub release whenever the version in
+# main.go (AppVersion) changes on the main branch. Running copies of SECquence look
+# at the latest release to decide whether to offer an update.
 name: Release
 
 on:
   push:
-    tags: ['v*.*.*']
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,25 +14,35 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+      - name: Read the version
+        id: v
+        run: |
+          VERSION="$(sed -n 's/^var AppVersion = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' main.go)"
+          test -n "$VERSION" || { echo "no AppVersion found in main.go"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then echo "new=false" >> "$GITHUB_OUTPUT"; else echo "new=true" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - name: Test
         run: go test ./...
+      - uses: actions/setup-node@v4
+        if: steps.v.outputs.new == 'true'
+        with:
+          node-version: 20
       - name: Build
+        if: steps.v.outputs.new == 'true'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.v.outputs.version }}"
           GOOS=windows GOARCH=amd64 go build -trimpath \
             -ldflags "-H windowsgui -s -w -X main.AppVersion=$VERSION -X main.UpdateRepo=$GITHUB_REPOSITORY" \
             -o build/raw.exe .
           (cd build && npm ci && node brand.mjs raw.exe ../SECquence.exe "$VERSION")
           sha256sum SECquence.exe | cut -d' ' -f1 > SECquence.exe.sha256
       - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" SECquence.exe SECquence.exe.sha256 --title "SECquence ${GITHUB_REF_NAME#v}" --generate-notes
+        if: steps.v.outputs.new == 'true'
+        run: gh release create "v${{ steps.v.outputs.version }}" SECquence.exe SECquence.exe.sha256 --target "$GITHUB_SHA" --title "SECquence ${{ steps.v.outputs.version }}" --generate-notes

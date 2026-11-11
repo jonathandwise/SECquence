@@ -73,7 +73,7 @@ Go 1.24 or later, no other dependencies:
     go test ./...
     GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o SECquence.exe .
 
-Releases are built by GitHub Actions when a tag like `v2.5.0` is pushed
+Releases are built by GitHub Actions when `AppVersion` in `main.go` changes on `main`
 (`.github/workflows/release.yml`), which also adds the icon and version details.
 
 This is a personal research tool. Nothing it shows is investment advice.
