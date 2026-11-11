@@ -472,3 +472,26 @@ code { font-family: var(--mono); font-size: 12px; background: var(--sunk); paddi
 .update-chip { margin: 0 12px 8px; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 500; font-size: 13px; cursor: pointer; text-align: center; }
 .update-chip:hover { filter: brightness(1.08); }
 .update-notes { max-height: 220px; overflow: auto; white-space: pre-wrap; font: inherit; font-size: 12.5px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; }
+
+/* model versions and the More menu */
+.val-ver { display: flex; align-items: center; gap: 7px; font-weight: 500; color: var(--ink-2); }
+.val-ver .select { height: 30px; max-width: 220px; }
+.menu { position: relative; }
+.menu > summary { list-style: none; cursor: pointer; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary::after { content: " ▾"; font-size: 11px; opacity: .7; }
+.menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 250px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); padding: 5px; display: grid; }
+.menu-items button { text-align: left; border: 0; background: none; color: var(--ink); font: inherit; padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+.menu-items button:hover:not(:disabled) { background: var(--accent-soft); }
+.menu-items button:disabled { color: var(--muted); cursor: default; }
+.menu-items hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+
+/* website resources */
+.web-config { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 6px 0 12px; display: grid; gap: 12px; max-width: 720px; }
+.web-config label { display: grid; gap: 5px; font-weight: 500; color: var(--ink-2); }
+.web-config .row { display: flex; gap: 8px; }
+.web-config .row .input { flex: 1; min-width: 0; height: 32px; }
+.web-config small { font-weight: 400; }
+.web-extra { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.web-extra span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-doc .cat-top b { font-weight: 500; }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -367,7 +368,7 @@ func TestSessions(t *testing.T) {
 	if err := st.SaveSessionAs(mine, false); err != nil {
 		t.Fatal(err)
 	}
-	if m, saved := st.LoadModel(1); !saved || m.Beta != 1.1 || len(st.Get().Watchlist) != 1 || st.SessionFile() != mine {
+	if m, saved := st.LoadModel(1, ""); !saved || m.Beta != 1.1 || len(st.Get().Watchlist) != 1 || st.SessionFile() != mine {
 		t.Fatalf("session did not carry the local work over")
 	}
 	// Changes now go to the file, not to this computer's session.
@@ -379,7 +380,7 @@ func TestSessions(t *testing.T) {
 	if strings.Contains(string(b), "a@b.co") {
 		t.Error("the session file must not hold the contact email")
 	}
-	if s, err := readSession(mine); err != nil || len(s.Watchlist) != 2 || s.Models["1"].Beta != 2 {
+	if s, err := readSession(mine); err != nil || len(s.Watchlist) != 2 || s.Sets["1"].Versions[0].Beta != 2 {
 		t.Fatalf("file not updated: %v", err)
 	}
 
@@ -388,13 +389,13 @@ func TestSessions(t *testing.T) {
 	if err := st.SaveSessionAs(theirs, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, saved := st.LoadModel(1); saved || len(st.Get().Watchlist) != 0 {
+	if _, saved := st.LoadModel(1, ""); saved || len(st.Get().Watchlist) != 0 {
 		t.Error("a new session should start empty")
 	}
 	if err := st.CloseSession(); err != nil {
 		t.Fatal(err)
 	}
-	if m, _ := st.LoadModel(1); m == nil || m.Beta != 1.1 || len(st.Get().Watchlist) != 1 {
+	if m, _ := st.LoadModel(1, ""); m == nil || m.Beta != 1.1 || len(st.Get().Watchlist) != 1 {
 		t.Error("this computer's session should be untouched by work done in a file")
 	}
 	if err := st.OpenSession(mine); err != nil {
@@ -415,5 +416,62 @@ func TestSessions(t *testing.T) {
 	}
 	if err := gone.OpenSession(filepath.Join(dir, "cfg", "settings.json")); err == nil {
 		t.Error("a file that is not a session should be refused")
+	}
+}
+
+func TestModelVersions(t *testing.T) {
+	dir := t.TempDir()
+	st := OpenStore(filepath.Join(dir, "cfg"), "")
+	// A model file written before versions existed becomes the "Base case".
+	old := DefaultModel(nil, nil, 2026)
+	old.Beta = 1.3
+	b, _ := json.Marshal(old)
+	_ = os.MkdirAll(filepath.Join(dir, "cfg", "models"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "cfg", "models", "7.json"), b, 0o644)
+	if m, saved := st.LoadModel(7, ""); !saved || m.Name != defaultModelName || m.Beta != 1.3 {
+		t.Fatalf("legacy model not read as Base case")
+	}
+	bull := old
+	bull.Name, bull.Beta = "Bull case", 0.9
+	if err := st.SaveModel(7, &bull); err != nil {
+		t.Fatal(err)
+	}
+	set := st.Models(7)
+	if len(set.Versions) != 2 || set.Active != "Bull case" {
+		t.Fatalf("after save as: %v active %q", set.names(), set.Active)
+	}
+	if m, _ := st.LoadModel(7, "base CASE"); m == nil || m.Beta != 1.3 {
+		t.Error("named version not found")
+	}
+	bull.Beta = 0.8 // saving under the same name replaces it
+	_ = st.SaveModel(7, &bull)
+	if m, _ := st.LoadModel(7, ""); len(st.Models(7).Versions) != 2 || m.Beta != 0.8 {
+		t.Error("save did not replace the same-named version")
+	}
+	st.UseModel(7, "Base case")
+	if st.Models(7).Active != "Base case" {
+		t.Error("UseModel did not switch")
+	}
+	_ = st.DeleteModel(7, "Base case")
+	if set := st.Models(7); len(set.Versions) != 1 || set.Active != "Bull case" {
+		t.Errorf("after delete: %v active %q", set.names(), set.Active)
+	}
+	_ = st.DeleteModel(7, "Bull case")
+	if _, err := os.Stat(filepath.Join(dir, "cfg", "models", "7.json")); err == nil {
+		t.Error("empty set should remove the file")
+	}
+
+	// A format 1 session file (one model per company) opens with that model as Base case.
+	f1 := filepath.Join(dir, "old.secq")
+	_ = os.WriteFile(f1, []byte(`{"app":"SECquence session","format":1,"watchlist":[],"models":{"7":`+string(b)+`}}`), 0o644)
+	if err := st.OpenSession(f1); err != nil {
+		t.Fatal(err)
+	}
+	if m, saved := st.LoadModel(7, ""); !saved || m.Name != defaultModelName {
+		t.Error("format 1 session model not carried over")
+	}
+	_ = st.SetSite(7, SiteConfig{URL: "https://example.com", Pages: []string{"https://example.com/a"}})
+	if s, _ := readSession(f1); s.Format != 2 || s.Sites["7"].URL != "https://example.com" || len(s.Models) != 0 {
+		t.Errorf("session not rewritten in the new format: %+v", s)
 	}
 }

@@ -43,6 +43,19 @@ A session is your watchlist and saved valuation models. **Session** (under the
 search box) saves it to a `.secq` file, opens one, or starts an empty one, so work
 can move between computers or be kept apart for each person.
 
+## Model versions and model files
+The Valuation tab keeps several named versions of a company's model, such as
+"Base case" and "Bull case". **Save as** makes a new one; the Version menu
+switches between them. **More** saves one model to its own `.secqmodel` file or
+opens such a file, to pass a single model to someone else.
+
+## Website Resources
+Lists the files a company posts on its own website and does not file with the
+SEC: investor slide decks, conference posters, scientific presentations and
+publications. It reads the home page and the pages that look like investor
+events, science and publications. Sites differ, so it is a best effort; add a
+page by hand under "Website and pages" when something is missing.
+
 ## Where things are kept
 - PDFs and Excel exports: `Documents\SEC Filings\<TICKER>\` (change in Settings).
 - Settings, watchlist and saved valuation models: `%APPDATA%\SECquence\`

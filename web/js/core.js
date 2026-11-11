@@ -47,6 +47,7 @@ const loaders = {
   catalysts: (c) => api(`/api/company/${c.cik}/catalysts?name=${enc(c.name)}`),
   insiders: (c) => api(`/api/company/${c.cik}/insiders`),
   model: (c) => api(`/api/company/${c.cik}/model?name=${enc(c.name)}`),
+  site: (c) => api(`/api/company/${c.cik}/site`),
 };
 export function data(key, fresh = false) {
   const c = state.company;

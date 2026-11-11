@@ -3,6 +3,7 @@
 // server (valuation.go) and follows the Biotech sum-of-the-parts worksheet.
 import { $, $$, api, state, data, emit, toast, esc, fmt, niceDate, relTime, debounce, icon } from './core.js';
 
+let versions = []; // names of this company's saved versions
 let root, model = null, result = null, saved = false, dirty = false, price = null, flowsFor = 0, calcSeq = 0;
 const open = new Set([0]); // which drug panels are expanded
 let noteOpen = null;   // path of the input whose notepad is showing
@@ -13,12 +14,27 @@ const NOTE_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="
 
 const html = `
 <div class="val-bar">
+  <label class="val-ver" title="This company's saved versions of the model">Version <select class="select" id="val-version"></select></label>
   <span id="val-status" class="muted"></span><span style="flex:1"></span>
   <button class="btn" id="val-add">Add a drug</button>
-  <button class="btn" id="val-reset" title="Discard this model and start again from the filings and pipeline">Start over</button>
-  <button class="btn" id="val-export">${icon.down}Export to Excel</button>
+  <details class="menu" id="val-more"><summary class="btn">More</summary><div class="menu-items">
+    <button type="button" id="val-export">Export to Excel</button>
+    <button type="button" id="val-file-save">Save this model to a file…</button>
+    <button type="button" id="val-file-open">Open a model file…</button>
+    <hr>
+    <button type="button" id="val-reset" title="Replace what is on screen with the starting assumptions from the filings and pipeline. Nothing saved changes until you save.">Start over from the filings</button>
+    <button type="button" id="val-delete">Delete this version…</button>
+  </div></details>
+  <button class="btn" id="val-saveas" title="Save a copy under a new name, such as Bull case">Save as…</button>
   <button class="btn primary" id="val-save">Save model</button>
 </div>
+<dialog id="val-ask"><form method="dialog">
+  <h3 id="val-ask-title"></h3>
+  <p id="val-ask-text" class="muted" style="margin:0"></p>
+  <label id="val-ask-field">Name<input class="input" id="val-ask-name" maxlength="60" autocomplete="off"></label>
+  <div class="err" id="val-ask-err" hidden></div>
+  <div class="acts"><button class="btn">Cancel</button><button type="button" class="btn primary" id="val-ask-ok"></button></div>
+</form></dialog>
 <div class="val"><div class="val-form" id="val-form"></div><div class="val-out" id="val-out"></div></div>`;
 
 // ------------------------------------------------------------------ form
@@ -286,7 +302,49 @@ function changed(redraw) {
 
 function take(m) {
   model = m.model; result = m.result; saved = m.saved; dirty = false;
-  renderForm(); renderOut(); renderStatus();
+  if (m.versions) versions = m.versions;
+  model.name ||= 'Base case';
+  renderVersions(); renderForm(); renderOut(); renderStatus();
+}
+const has = (name) => versions.some((v) => v.toLowerCase() === name.toLowerCase());
+function renderVersions() {
+  const names = has(model.name) ? versions : [...versions, model.name];
+  $('#val-version', root).innerHTML = names.map((n) => `<option value="${esc(n)}" ${n.toLowerCase() === model.name.toLowerCase() ? 'selected' : ''}>${esc(n)}${has(n) ? '' : ' (not saved)'}</option>`).join('');
+  $('#val-delete', root).disabled = !has(model.name);
+}
+// keepEdits runs next straight away, or after asking about unsaved edits.
+const keepEdits = (next, doing) => (dirty && state.askUnsaved ? state.askUnsaved(next, doing) : next());
+async function fetchModel(query) {
+  const c = state.company;
+  try {
+    const m = await api(`/api/company/${c.cik}/model?name=${encodeURIComponent(c.name)}${query}`);
+    if (state.company !== c) return null;
+    return m;
+  } catch (e) { toast(e.message, true); return null; }
+}
+async function switchVersion(name) {
+  const m = await fetchModel(`&version=${encodeURIComponent(name)}`);
+  if (!m) return renderVersions();
+  state.data.model = Promise.resolve(JSON.parse(JSON.stringify(m)));
+  open.clear(); open.add(0); noteOpen = null;
+  take(m);
+}
+// ask shows the small question box: a name to type (Save as) or a yes/no (Delete).
+function ask({ title, text, name, ok, run }) {
+  const d = $('#val-ask', root);
+  $('#val-ask-title', root).textContent = title;
+  $('#val-ask-text', root).textContent = text;
+  $('#val-ask-field', root).hidden = name === undefined;
+  $('#val-ask-name', root).value = name || '';
+  $('#val-ask-err', root).hidden = true;
+  $('#val-ask-ok', root).textContent = ok;
+  $('#val-ask-ok', root).onclick = async () => {
+    const problem = await run($('#val-ask-name', root).value.trim().replace(/\s+/g, ' '));
+    if (!problem) return d.close();
+    $('#val-ask-err', root).textContent = problem; $('#val-ask-err', root).hidden = false;
+  };
+  d.showModal();
+  if (name !== undefined) { $('#val-ask-name', root).focus(); $('#val-ask-name', root).select(); }
 }
 
 async function load(fresh) {
@@ -311,9 +369,10 @@ async function saveModel() {
     const m = await api(`/api/company/${c.cik}/model`, { method: 'PUT', json: model });
     if (state.company !== c) return true;
     state.data.model = Promise.resolve(JSON.parse(JSON.stringify(m)));
-    model.placeholder = false; model.updated = m.model.updated; result = m.result; saved = true; dirty = false;
-    renderOut(); renderStatus();
-    toast('Model saved');
+    model.placeholder = false; model.updated = m.model.updated; model.name = m.model.name; result = m.result; saved = true; dirty = false;
+    versions = m.versions || versions;
+    renderVersions(); renderOut(); renderStatus();
+    toast(`Saved "${model.name}"`);
     return true;
   } catch (e) { toast(e.message, true); return false; }
 }
@@ -408,13 +467,69 @@ export default {
       changed(true);
     });
     $('#val-save', root).addEventListener('click', saveModel);
-    $('#val-reset', root).addEventListener('click', async () => {
-      const c = state.company;
-      if (saved && !confirmReset()) return;
-      await api(`/api/company/${c.cik}/model`, { method: 'DELETE' }).catch(() => {});
-      open.clear(); open.add(0); noteOpen = null;
-      load(true);
+    const closeMenu = () => { $('#val-more', root).open = false; };
+    $('#val-more', root).addEventListener('click', (e) => { if (e.target.closest('.menu-items button')) closeMenu(); });
+    document.addEventListener('click', (e) => { if (!e.target.closest('#val-more')) closeMenu(); });
+    $('#val-version', root).addEventListener('change', (e) => {
+      const name = e.target.value;
+      renderVersions(); // show the current one again until the switch happens
+      keepEdits(() => switchVersion(name), 'switching versions');
     });
+    $('#val-saveas', root).addEventListener('click', () => ask({
+      title: 'Save as a new version', ok: 'Save',
+      text: 'Saves what is on screen under a new name and keeps the other versions as they are.',
+      name: has(model.name) ? '' : model.name,
+      run: async (name) => {
+        if (!name) return 'Type a name, such as Bull case.';
+        if (has(name)) return `There is already a version called "${name}". Choose another name.`;
+        const before = model.name;
+        model.name = name;
+        if (await saveModel()) return '';
+        model.name = before;
+        return 'That could not be saved.';
+      },
+    }));
+    $('#val-delete', root).addEventListener('click', () => ask({
+      title: `Delete "${model.name}"?`, ok: 'Delete',
+      text: versions.length > 1 ? 'This saved version is removed. Your other versions stay.' : 'This is the only saved version. The Valuation tab goes back to the starting assumptions.',
+      run: async () => {
+        const c = state.company;
+        try { await api(`/api/company/${c.cik}/model?version=${encodeURIComponent(model.name)}`, { method: 'DELETE' }); } catch (e) { return e.message; }
+        open.clear(); open.add(0); noteOpen = null;
+        load(true);
+        return '';
+      },
+    }));
+    $('#val-reset', root).addEventListener('click', async () => {
+      const m = await fetchModel(`&fresh=1&version=${encodeURIComponent(model.name)}`);
+      if (!m) return;
+      const wasSaved = has(model.name);
+      open.clear(); open.add(0); noteOpen = null;
+      take(m);
+      if (wasSaved) { dirty = true; renderStatus(); toast('Back to the starting assumptions. The saved version changes only when you save.'); }
+    });
+    $('#val-file-save', root).addEventListener('click', async () => {
+      const c = state.company;
+      try {
+        const r = await api(`/api/company/${c.cik}/model/file`, { json: { action: 'save', model, ticker: c.ticker, company: c.name } });
+        if (!r.canceled) toast(`Model saved to ${r.file}`);
+      } catch (e) { toast(e.message, true); }
+    });
+    $('#val-file-open', root).addEventListener('click', () => keepEdits(async () => {
+      const c = state.company;
+      try {
+        const r = await api(`/api/company/${c.cik}/model/file`, { json: { action: 'open' } });
+        if (r.canceled || state.company !== c) return;
+        // Shown as a new, unsaved version so it cannot overwrite one of the same name.
+        let name = r.model.name || 'From file';
+        if (has(name)) { let i = 2; const base = `${name} (from file)`; name = base; while (has(name)) name = `${base} ${i++}`; }
+        r.model.name = name;
+        open.clear(); open.add(0); noteOpen = null;
+        take({ model: r.model, result: r.result, saved: false });
+        dirty = true; renderStatus();
+        toast(`Opened as "${name}". Save model to keep it in this session.`);
+      } catch (e) { toast(e.message, true); }
+    }, 'opening a model file'));
     $('#val-export', root).addEventListener('click', async () => {
       const c = state.company;
       try {
@@ -423,16 +538,10 @@ export default {
       } catch (e) { toast(e.message, true); }
     });
   },
-  reset() { model = null; result = null; calcSeq++; open.clear(); open.add(0); flowsFor = 0; noteOpen = null; },
+  reset() { versions = []; model = null; result = null; calcSeq++; open.clear(); open.add(0); flowsFor = 0; noteOpen = null; },
   show() { if (!model) load(false); },
 };
 
 // Start over deletes a saved model, so it asks first: a second press within five
 // seconds confirms. (Browser confirm() dialogs would freeze the app window.)
 let resetArmed = 0;
-function confirmReset() {
-  if (Date.now() - resetArmed < 5000) { resetArmed = 0; return true; }
-  resetArmed = Date.now();
-  toast('This deletes the saved model. Press Start over again to confirm.', true, 5000);
-  return false;
-}

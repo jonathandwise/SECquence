@@ -153,14 +153,14 @@ if ($env:SECQ_PICK_SAVE -eq '1') {
   $dlg = New-Object System.Windows.Forms.SaveFileDialog
   $dlg.OverwritePrompt = $true
   $dlg.AddExtension = $true
-  $dlg.DefaultExt = 'secq'
+  $dlg.DefaultExt = $env:SECQ_PICK_EXT
   $dlg.FileName = $env:SECQ_PICK_NAME
 } else {
   $dlg = New-Object System.Windows.Forms.OpenFileDialog
   $dlg.CheckFileExists = $true
 }
 $dlg.Title = $env:SECQ_PICK_TITLE
-$dlg.Filter = 'SECquence session (*.secq)|*.secq|All files (*.*)|*.*'
+$dlg.Filter = $env:SECQ_PICK_LABEL + ' (*.' + $env:SECQ_PICK_EXT + ')|*.' + $env:SECQ_PICK_EXT + '|All files (*.*)|*.*'
 if ($env:SECQ_PICK_DIR -and (Test-Path -LiteralPath $env:SECQ_PICK_DIR)) { $dlg.InitialDirectory = $env:SECQ_PICK_DIR }
 $result = $null
 if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $result = $dlg.FileName }
@@ -168,8 +168,9 @@ $owner.Close()
 if ($result) { Write-Output ('PICKED:' + $result) } else { Write-Output 'CANCELED' }
 `
 
-// pickFile shows an Open dialog, or a Save dialog when save is set, for a session file.
-func pickFile(save bool, title, dir, name string) (string, bool, error) {
+// pickFile shows an Open dialog, or a Save dialog when save is set, for files with
+// the extension ext (".secq"), described in the dialog as label.
+func pickFile(save bool, title, dir, name, ext, label string) (string, bool, error) {
 	u := utf16.Encode([]rune(pickFilePS))
 	b := make([]byte, len(u)*2)
 	for i, c := range u {
@@ -181,7 +182,8 @@ func pickFile(save bool, title, dir, name string) (string, bool, error) {
 	if save {
 		mode = "1"
 	}
-	cmd.Env = append(os.Environ(), "SECQ_PICK_SAVE="+mode, "SECQ_PICK_TITLE="+title, "SECQ_PICK_DIR="+dir, "SECQ_PICK_NAME="+name)
+	cmd.Env = append(os.Environ(), "SECQ_PICK_SAVE="+mode, "SECQ_PICK_TITLE="+title, "SECQ_PICK_DIR="+dir, "SECQ_PICK_NAME="+name,
+		"SECQ_PICK_EXT="+strings.TrimPrefix(ext, "."), "SECQ_PICK_LABEL="+label)
 	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimPrefix(string(out), "\xef\xbb\xbf")

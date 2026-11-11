@@ -214,17 +214,17 @@ func TestStoreMigrationAndModels(t *testing.T) {
 		t.Fatalf("reload %+v", s)
 	}
 	m := worksheetModel()
-	if _, ok := st.LoadModel(7); ok {
+	if _, ok := st.LoadModel(7, ""); ok {
 		t.Fatal("unexpected model")
 	}
 	if err := st.SaveModel(7, &m); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := st.LoadModel(7); !ok || len(got.Products) != 3 || got.Products[2].Phases[2].PSuccess != 0.65 {
+	if got, ok := st.LoadModel(7, ""); !ok || len(got.Products) != 3 || got.Products[2].Phases[2].PSuccess != 0.65 {
 		t.Fatalf("%+v", got)
 	}
-	st.DeleteModel(7)
-	if _, ok := st.LoadModel(7); ok {
+	_ = st.DeleteModel(7, defaultModelName)
+	if _, ok := st.LoadModel(7, ""); ok {
 		t.Fatal("model not deleted")
 	}
 }

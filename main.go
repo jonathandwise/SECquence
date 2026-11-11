@@ -23,7 +23,7 @@ import (
 const AppName = "SECquence"
 
 // AppVersion is replaced with the release's version when a release is built.
-var AppVersion = "2.5.0"
+var AppVersion = "2.6.0"
 
 var (
 	logMu    sync.Mutex
@@ -88,6 +88,7 @@ func main() {
 	}
 	app := &App{store: store, cacheDir: cacheDir, token: randHex(16), market: NewMarket()}
 	app.sec = NewSEC(store.Email, cacheDir)
+	app.sites = NewSites(cacheDir)
 	app.printer = NewPrinter(cacheDir, app.sec.UA)
 	app.dl = &Downloader{sec: app.sec, printer: app.printer, root: store.DownloadDir}
 

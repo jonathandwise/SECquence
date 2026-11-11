@@ -20,7 +20,7 @@ func pickFolder(initial string) (string, bool, error) {
 	return strings.TrimSpace(string(out)), true, nil
 }
 
-func pickFile(save bool, title, dir, name string) (string, bool, error) {
+func pickFile(save bool, title, dir, name, ext, label string) (string, bool, error) {
 	z, err := exec.LookPath("zenity")
 	if err != nil {
 		return "", false, errors.New("no file picker available on this system")

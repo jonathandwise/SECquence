@@ -7,11 +7,12 @@ import financials from './financials.js';
 import stock from './stock.js';
 import news from './news.js';
 import catalysts from './catalysts.js';
+import website from './website.js';
 import valuation from './valuation.js';
 import ownership from './ownership.js';
 import compare from './compare.js';
 
-const views = [overview, financials, valuation, filings, ownership, stock, news, catalysts];
+const views = [overview, financials, valuation, filings, ownership, stock, news, catalysts, website];
 
 // The window closing ends the app: the server watches this heartbeat.
 const ping = () => fetch('/api/ping', { headers: { 'X-App-Token': T } }).catch(() => {});
@@ -120,6 +121,7 @@ $('#s-update').addEventListener('click', async () => {
 // askUnsaved shows the question. next is what to do once the edits are saved or
 // dropped; without it, the app closes.
 let afterUnsaved = null;
+state.askUnsaved = (next, doing) => askUnsaved(next, doing); // for tabs that switch models
 function askUnsaved(next, doing = 'opening another company') {
   afterUnsaved = next || null;
   $('#unsaved-q').textContent = `You have unsaved changes in this model. Would you like to save before ${next ? doing : 'exiting'}?`;

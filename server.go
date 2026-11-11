@@ -36,6 +36,7 @@ type App struct {
 	quit     atomic.Bool
 	window   atomic.Pointer[os.Process] // the browser process showing the app window
 	updater  Updater
+	sites    *Sites
 }
 
 type httpErr struct {
@@ -157,7 +158,11 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("PUT /api/company/{cik}/model", j(a.putModel))
 	mux.HandleFunc("DELETE /api/company/{cik}/model", j(a.deleteModel))
 	mux.HandleFunc("POST /api/company/{cik}/model/export", j(a.exportModel))
+	mux.HandleFunc("POST /api/company/{cik}/model/file", j(a.modelToFile))
 	mux.HandleFunc("POST /api/model/calc", j(a.calcModel))
+	mux.HandleFunc("GET /api/company/{cik}/site", j(a.getSite))
+	mux.HandleFunc("PUT /api/company/{cik}/site", j(a.putSite))
+	mux.HandleFunc("POST /api/company/{cik}/site/save", j(a.saveSiteDoc))
 
 	mux.HandleFunc("GET /api/chart", j(a.chart))
 	mux.HandleFunc("GET /api/news", j(a.news))
@@ -254,7 +259,7 @@ func (a *App) session(r *http.Request) (any, error) {
 			_ = os.MkdirAll(dir, 0o755)
 		}
 		title := map[string]string{"open": "Open a SECquence session", "saveas": "Save this session as", "new": "Where to keep the new session"}[in.Action]
-		p, picked, err := pickFile(in.Action != "open", title, dir, map[string]string{"open": "", "saveas": "My session", "new": "New session"}[in.Action]+SessionExt)
+		p, picked, err := pickFile(in.Action != "open", title, dir, map[string]string{"open": "", "saveas": "My session", "new": "New session"}[in.Action]+SessionExt, SessionExt, "SECquence session")
 		pickMu.Unlock()
 		if err != nil {
 			return nil, &httpErr{500, err.Error()}
@@ -609,6 +614,13 @@ func tidy(m *Model) error {
 		return bad("That model has too many notes.")
 	}
 	trimNotes(m.Src)
+	m.Name = strings.Join(strings.Fields(m.Name), " ")
+	if r := []rune(m.Name); len(r) > 60 {
+		m.Name = string(r[:60])
+	}
+	if m.Name == "" {
+		m.Name = defaultModelName
+	}
 	return nil
 }
 
@@ -627,14 +639,29 @@ func trimNotes(src map[string]string) {
 	}
 }
 
+// modelReply is what the Valuation tab gets back: a model, its numbers, and the
+// company's saved versions.
+func (a *App) modelReply(cik int, m *Model, saved bool) map[string]any {
+	set := a.store.Models(cik)
+	return map[string]any{"model": m, "result": m.Calculate(), "saved": saved, "versions": set.names(), "active": set.Active}
+}
+
 func (a *App) getModel(r *http.Request) (any, error) {
 	cik, err := pathCIK(r)
 	if err != nil {
 		return nil, err
 	}
-	if m, saved := a.store.LoadModel(cik); saved && tidy(m) == nil {
-		m.assumeStart()
-		return map[string]any{"model": m, "result": m.Calculate(), "saved": true}, nil
+	version := strings.TrimSpace(r.URL.Query().Get("version"))
+	fresh := r.URL.Query().Get("fresh") == "1" // the starting assumptions, whatever is saved
+	if !fresh {
+		if m, saved := a.store.LoadModel(cik, version); saved && tidy(m) == nil {
+			m.assumeStart()
+			a.store.UseModel(cik, m.Name)
+			return a.modelReply(cik, m, true), nil
+		}
+		if version != "" {
+			return nil, &httpErr{404, "That saved version no longer exists."}
+		}
 	}
 	// No saved model: start from the filings and the clinical pipeline.
 	fin, _ := a.sec.Financials(r.Context(), cik)
@@ -643,7 +670,10 @@ func (a *App) getModel(r *http.Request) (any, error) {
 		trials, _ = a.market.Trials(r.Context(), name)
 	}
 	m := DefaultModel(fin, trials, time.Now().Year())
-	return map[string]any{"model": m, "result": m.Calculate(), "saved": false}, nil
+	if m.Name = defaultModelName; fresh && version != "" {
+		m.Name = version
+	}
+	return a.modelReply(cik, &m, false), nil
 }
 
 func (a *App) calcModel(r *http.Request) (any, error) {
@@ -669,12 +699,15 @@ func (a *App) putModel(r *http.Request) (any, error) {
 	if err := tidy(&m); err != nil {
 		return nil, err
 	}
+	if set := a.store.Models(cik); set.find(m.Name) < 0 && len(set.Versions) >= 20 {
+		return nil, bad("A company can have up to 20 saved versions. Delete one first.")
+	}
 	m.Placeholder = false
 	m.Updated = time.Now().Format(time.RFC3339)
 	if err := a.store.SaveModel(cik, &m); err != nil {
 		return nil, &httpErr{500, "Couldn't save the model: " + err.Error()}
 	}
-	return map[string]any{"model": m, "result": m.Calculate(), "saved": true}, nil
+	return a.modelReply(cik, &m, true), nil
 }
 
 func (a *App) deleteModel(r *http.Request) (any, error) {
@@ -682,8 +715,117 @@ func (a *App) deleteModel(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.store.DeleteModel(cik)
-	return ok, nil
+	version := strings.TrimSpace(r.URL.Query().Get("version"))
+	if version == "" {
+		version = a.store.Models(cik).Active
+	}
+	if err := a.store.DeleteModel(cik, version); err != nil {
+		return nil, &httpErr{500, "Couldn't delete that version: " + err.Error()}
+	}
+	set := a.store.Models(cik)
+	return map[string]any{"ok": true, "versions": set.names(), "active": set.Active}, nil
+}
+
+// A model file holds one company's model on its own, to copy or send to someone.
+const (
+	modelFileApp = "SECquence model"
+	ModelExt     = ".secqmodel"
+)
+
+type modelFile struct {
+	App     string `json:"app"`
+	Format  int    `json:"format"`
+	CIK     int    `json:"cik"`
+	Ticker  string `json:"ticker"`
+	Company string `json:"company"`
+	Saved   string `json:"saved"`
+	Model   Model  `json:"model"`
+}
+
+// modelToFile saves the model on screen to a file, or reads one back. Without a
+// path it asks with the system's file window. A model read from a file is only
+// shown; it joins the saved versions when the user saves it.
+func (a *App) modelToFile(r *http.Request) (any, error) {
+	cik, err := pathCIK(r)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Action, Path, Ticker, Company string
+		Model                         Model
+	}
+	if err := readBody(r, &in); err != nil {
+		return nil, err
+	}
+	save := in.Action == "save"
+	if !save && in.Action != "open" {
+		return nil, bad("unknown action")
+	}
+	if save {
+		if err := tidy(&in.Model); err != nil {
+			return nil, err
+		}
+	}
+	path := strings.TrimSpace(in.Path)
+	if path == "" {
+		if !pickMu.TryLock() {
+			return nil, &httpErr{409, "A file window is already open."}
+		}
+		dir := filepath.Join(documentsDir(), AppName)
+		_ = os.MkdirAll(dir, 0o755)
+		title, name := "Open a SECquence model", ""
+		if save {
+			title, name = "Save this model to a file", sanitizeName(strings.ToUpper(in.Ticker)+" "+in.Model.Name)+ModelExt
+		}
+		p, picked, err := pickFile(save, title, dir, name, ModelExt, "SECquence model")
+		pickMu.Unlock()
+		if err != nil {
+			return nil, &httpErr{500, err.Error()}
+		}
+		if !picked {
+			return map[string]any{"canceled": true}, nil
+		}
+		path = p
+	}
+	if !filepath.IsAbs(path) {
+		return nil, bad("The model file needs a full path.")
+	}
+	path = filepath.Clean(path)
+	if save {
+		if !strings.EqualFold(filepath.Ext(path), ModelExt) {
+			path += ModelExt
+		}
+		in.Model.Placeholder = false
+		b, _ := json.MarshalIndent(modelFile{App: modelFileApp, Format: 1, CIK: cik, Ticker: strings.ToUpper(in.Ticker), Company: in.Company,
+			Saved: time.Now().Format(time.RFC3339), Model: in.Model}, "", "  ")
+		if err := writeFileAtomic(path, b); err != nil {
+			return nil, bad("Couldn't write %s: %v", path, err)
+		}
+		return map[string]any{"file": path}, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, bad("Couldn't read %s.", path)
+	}
+	var f modelFile
+	if json.Unmarshal(b, &f) != nil || f.App != modelFileApp {
+		return nil, bad("That file is not a SECquence model.")
+	}
+	if f.Format > 1 {
+		return nil, bad("That model was saved by a newer version of SECquence; update this copy to open it.")
+	}
+	if f.CIK != cik {
+		who := strings.TrimSpace(f.Ticker + " " + f.Company)
+		return nil, bad("That model is for %s. Open that company first, then open the file.", who)
+	}
+	if err := tidy(&f.Model); err != nil {
+		return nil, err
+	}
+	f.Model.assumeStart()
+	if f.Model.Name == "" {
+		f.Model.Name = defaultModelName
+	}
+	return map[string]any{"model": f.Model, "result": f.Model.Calculate(), "file": path}, nil
 }
 
 func (a *App) exportModel(r *http.Request) (any, error) {

@@ -66,6 +66,8 @@ type Product struct {
 }
 
 type Model struct {
+	// Name tells a company's saved versions apart ("Base case", "Bull case").
+	Name             string    `json:"name,omitempty"`
 	ValuationYear    int       `json:"valuationYear"`
 	Horizon          int       `json:"horizon"` // years modelled
 	Cash             float64   `json:"cash"`    // $mm

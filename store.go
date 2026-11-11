@@ -40,6 +40,8 @@ type Settings struct {
 	// SessionFile is the session file in use, "" for this computer's own session.
 	SessionFile    string   `json:"sessionFile,omitempty"`
 	RecentSessions []string `json:"recentSessions,omitempty"`
+	// Sites is this computer's session's copy of Session.Sites.
+	Sites map[string]*SiteConfig `json:"sites,omitempty"`
 }
 
 // A Session is one person's work: the watchlist, the saved valuation models and the
@@ -48,17 +50,54 @@ type Settings struct {
 // computer; while one is open, every change is written straight to it. Settings that
 // belong to the computer (email for the SEC, download folder, theme) are never in it.
 type Session struct {
-	App       string            `json:"app"`    // always sessionApp
-	Format    int               `json:"format"` // sessionFormat
-	Saved     string            `json:"saved"`
-	Watchlist []WatchItem       `json:"watchlist"`
-	Last      LastView          `json:"last"`
-	Models    map[string]*Model `json:"models"` // by CIK
+	App       string      `json:"app"`    // always sessionApp
+	Format    int         `json:"format"` // sessionFormat
+	Saved     string      `json:"saved"`
+	Watchlist []WatchItem `json:"watchlist"`
+	Last      LastView    `json:"last"`
+	// Sets holds each company's saved valuation models, by CIK. Models is where
+	// format 1 kept its single model per company; it is folded into Sets on reading.
+	Sets   map[string]*ModelSet `json:"modelSets"`
+	Models map[string]*Model    `json:"models,omitempty"`
+	// Sites holds, by CIK, the website and extra pages the user gave for a company.
+	Sites map[string]*SiteConfig `json:"sites,omitempty"`
+}
+
+// A ModelSet is a company's saved valuation models: named versions such as
+// "Base case" and "Bull case", and which one was used last.
+type ModelSet struct {
+	Active   string   `json:"active"`
+	Versions []*Model `json:"versions"`
+}
+
+const defaultModelName = "Base case"
+
+func (ms *ModelSet) find(name string) int {
+	for i, m := range ms.Versions {
+		if strings.EqualFold(m.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (ms *ModelSet) names() []string {
+	out := make([]string, len(ms.Versions))
+	for i, m := range ms.Versions {
+		out[i] = m.Name
+	}
+	return out
+}
+
+// SiteConfig is what the user told the app about a company's website.
+type SiteConfig struct {
+	URL   string   `json:"url,omitempty"`
+	Pages []string `json:"pages,omitempty"`
 }
 
 const (
 	sessionApp    = "SECquence session"
-	sessionFormat = 1
+	sessionFormat = 2
 	SessionExt    = ".secq"
 )
 
@@ -209,8 +248,18 @@ func readSession(path string) (*Session, error) {
 	if s.Watchlist == nil {
 		s.Watchlist = []WatchItem{}
 	}
-	if s.Models == nil {
-		s.Models = map[string]*Model{}
+	if s.Sets == nil {
+		s.Sets = map[string]*ModelSet{}
+	}
+	for cik, m := range s.Models { // format 1: one model per company
+		if _, has := s.Sets[cik]; !has && m != nil {
+			m.Name = defaultModelName
+			s.Sets[cik] = &ModelSet{Active: m.Name, Versions: []*Model{m}}
+		}
+	}
+	s.Models = nil
+	if s.Sites == nil {
+		s.Sites = map[string]*SiteConfig{}
 	}
 	return &s, nil
 }
@@ -269,7 +318,7 @@ func (st *Store) ForgetSession(path string) {
 func (st *Store) SaveSessionAs(path string, empty bool) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	s := &Session{Watchlist: []WatchItem{}, Models: map[string]*Model{}}
+	s := &Session{Watchlist: []WatchItem{}, Sets: map[string]*ModelSet{}, Sites: map[string]*SiteConfig{}}
 	switch {
 	case empty:
 	case st.sess != nil:
@@ -283,9 +332,13 @@ func (st *Store) SaveSessionAs(path string, empty bool) error {
 			if err != nil {
 				continue
 			}
-			if m, saved := st.localModel(cik); saved {
-				s.Models[strconv.Itoa(cik)] = m
+			if set := st.localSet(cik); len(set.Versions) > 0 {
+				s.Sets[strconv.Itoa(cik)] = set
 			}
+		}
+		for cik, c := range st.s.Sites {
+			cc := *c
+			s.Sites[cik] = &cc
 		}
 	}
 	prevFile, prev := st.s.SessionFile, st.sess
@@ -326,71 +379,183 @@ func (st *Store) modelPath(cik int) string {
 	return filepath.Join(st.dir, "models", fmt.Sprintf("%d.json", cik))
 }
 
-func (st *Store) LoadModel(cik int) (*Model, bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.sess != nil {
-		m, saved := st.sess.Models[strconv.Itoa(cik)]
-		if !saved || m == nil {
-			return nil, false
-		}
-		var c Model // a copy, so callers can't change the session behind the lock
-		b, _ := json.Marshal(m)
-		if json.Unmarshal(b, &c) != nil {
-			return nil, false
-		}
-		return &c, true
-	}
-	return st.localModel(cik)
-}
-
-func (st *Store) localModel(cik int) (*Model, bool) {
+// localSet reads this computer's saved models for a company. Files written before
+// versions existed hold a single model, which becomes the "Base case".
+func (st *Store) localSet(cik int) *ModelSet {
+	set := &ModelSet{}
 	b, err := os.ReadFile(st.modelPath(cik))
 	if err != nil {
-		return nil, false
+		return set
+	}
+	var probe struct {
+		Versions json.RawMessage `json:"versions"`
+	}
+	if json.Unmarshal(b, &probe) == nil && probe.Versions != nil {
+		if json.Unmarshal(b, set) != nil {
+			return &ModelSet{}
+		}
+		return set
 	}
 	var m Model
-	if json.Unmarshal(b, &m) != nil {
-		return nil, false
+	if json.Unmarshal(b, &m) != nil || len(m.Products) == 0 {
+		return set
 	}
-	return &m, true
+	m.Name = defaultModelName
+	return &ModelSet{Active: m.Name, Versions: []*Model{&m}}
 }
 
-func (st *Store) SaveModel(cik int, m *Model) error {
-	st.mu.Lock()
-	defer st.mu.Unlock()
+// set returns the live set for a company in the session in use. Caller holds the lock.
+func (st *Store) set(cik int) *ModelSet {
 	if st.sess != nil {
-		var c Model
-		b, _ := json.Marshal(m)
-		if err := json.Unmarshal(b, &c); err != nil {
-			return err
+		if set := st.sess.Sets[strconv.Itoa(cik)]; set != nil {
+			return set
 		}
-		prev, had := st.sess.Models[strconv.Itoa(cik)]
-		st.sess.Models[strconv.Itoa(cik)] = &c
+		return &ModelSet{}
+	}
+	return st.localSet(cik)
+}
+
+// putSet stores a company's set, removing it when it has no versions left.
+func (st *Store) putSet(cik int, set *ModelSet) error {
+	if st.sess != nil {
+		key := strconv.Itoa(cik)
+		prev, had := st.sess.Sets[key]
+		if len(set.Versions) == 0 {
+			delete(st.sess.Sets, key)
+		} else {
+			st.sess.Sets[key] = set
+		}
 		if err := st.writeSession(); err != nil {
 			if had {
-				st.sess.Models[strconv.Itoa(cik)] = prev
+				st.sess.Sets[key] = prev
 			} else {
-				delete(st.sess.Models, strconv.Itoa(cik))
+				delete(st.sess.Sets, key)
 			}
 			return err
 		}
 		return nil
 	}
-	b, err := json.MarshalIndent(m, "", "  ")
+	if len(set.Versions) == 0 {
+		_ = os.Remove(st.modelPath(cik))
+		return nil
+	}
+	b, err := json.MarshalIndent(set, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(st.modelPath(cik)), 0o755); err != nil {
 		return err
 	}
 	return writeFileAtomic(st.modelPath(cik), b)
 }
 
-func (st *Store) DeleteModel(cik int) {
+// Models returns a copy of a company's saved models.
+func (st *Store) Models(cik int) *ModelSet {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.sess != nil {
-		delete(st.sess.Models, strconv.Itoa(cik))
-		_ = st.writeSession()
-		return
+	out := &ModelSet{}
+	b, _ := json.Marshal(st.set(cik))
+	_ = json.Unmarshal(b, out)
+	return out
+}
+
+// LoadModel returns the named saved model, or the one used last when name is "".
+func (st *Store) LoadModel(cik int, name string) (*Model, bool) {
+	set := st.Models(cik)
+	if name == "" {
+		name = set.Active
 	}
-	_ = os.Remove(st.modelPath(cik))
+	i := set.find(name)
+	if i < 0 && len(set.Versions) > 0 && name == set.Active {
+		i = 0
+	}
+	if i < 0 {
+		return nil, false
+	}
+	return set.Versions[i], true
+}
+
+// SaveModel stores m under m.Name, replacing a version of that name, and makes it
+// the one in use.
+func (st *Store) SaveModel(cik int, m *Model) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var c Model
+	b, _ := json.Marshal(m)
+	if err := json.Unmarshal(b, &c); err != nil {
+		return err
+	}
+	if c.Name == "" {
+		c.Name = defaultModelName
+	}
+	cur := st.set(cik)
+	next := &ModelSet{Active: c.Name, Versions: append([]*Model{}, cur.Versions...)}
+	if i := next.find(c.Name); i >= 0 {
+		next.Versions[i] = &c
+	} else {
+		next.Versions = append(next.Versions, &c)
+	}
+	return st.putSet(cik, next)
+}
+
+// DeleteModel removes one saved version.
+func (st *Store) DeleteModel(cik int, name string) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	cur := st.set(cik)
+	next := &ModelSet{Active: cur.Active}
+	for _, m := range cur.Versions {
+		if !strings.EqualFold(m.Name, name) {
+			next.Versions = append(next.Versions, m)
+		}
+	}
+	if next.find(next.Active) < 0 {
+		next.Active = ""
+		if len(next.Versions) > 0 {
+			next.Active = next.Versions[0].Name
+		}
+	}
+	return st.putSet(cik, next)
+}
+
+// UseModel records which version is in use.
+func (st *Store) UseModel(cik int, name string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	cur := st.set(cik)
+	if i := cur.find(name); i >= 0 && cur.Active != cur.Versions[i].Name {
+		_ = st.putSet(cik, &ModelSet{Active: cur.Versions[i].Name, Versions: cur.Versions})
+	}
+}
+
+// Site returns what the user set for a company's website; SetSite stores it.
+func (st *Store) Site(cik int) SiteConfig {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	sites := st.s.Sites
+	if st.sess != nil {
+		sites = st.sess.Sites
+	}
+	if c := sites[strconv.Itoa(cik)]; c != nil {
+		return SiteConfig{URL: c.URL, Pages: append([]string{}, c.Pages...)}
+	}
+	return SiteConfig{}
+}
+
+func (st *Store) SetSite(cik int, c SiteConfig) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	key := strconv.Itoa(cik)
+	if st.sess != nil {
+		if st.sess.Sites == nil {
+			st.sess.Sites = map[string]*SiteConfig{}
+		}
+		st.sess.Sites[key] = &c
+		return st.writeSession()
+	}
+	if st.s.Sites == nil {
+		st.s.Sites = map[string]*SiteConfig{}
+	}
+	st.s.Sites[key] = &c
+	return st.writeSettings()
 }
